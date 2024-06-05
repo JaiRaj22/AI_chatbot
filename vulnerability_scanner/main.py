@@ -1,0 +1,124 @@
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin, urlparse
+from selenium import webdriver
+from selenium.webdriver.edge.service import Service as EdgeService
+from webdriver_manager.microsoft import EdgeChromiumDriverManager
+
+def crawl(url):
+    """
+    Crawl the given URL and return a list of all found links.
+    """
+    links = set()
+    try:
+        options = webdriver.EdgeOptions()
+        options.add_argument('--headless')
+        driver = webdriver.Edge(service=EdgeService(EdgeChromiumDriverManager().install()), options=options)
+        driver.get(url)
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        driver.quit()
+
+        # Find all anchor tags
+        for a_tag in soup.find_all('a', href=True):
+            link = urljoin(url, a_tag['href'])
+            if urlparse(link).netloc == urlparse(url).netloc:  # Only crawl the same domain
+                links.add(link)
+                print(f"Found link: {link}")  # Debug print to check found links
+
+        # Find all form actions
+        for form_tag in soup.find_all('form', action=True):
+            link = urljoin(url, form_tag['action'])
+            if urlparse(link).netloc == urlparse(url).netloc:
+                links.add(link)
+                print(f"Found form action: {link}")  # Debug print to check found form actions
+
+        # Find all script sources
+        for script_tag in soup.find_all('script', src=True):
+            link = urljoin(url, script_tag['src'])
+            if urlparse(link).netloc == urlparse(url).netloc:
+                links.add(link)
+                print(f"Found script src: {link}")  # Debug print to check found script sources
+
+        # Find all link tags (e.g., stylesheets)
+        for link_tag in soup.find_all('link', href=True):
+            link = urljoin(url, link_tag['href'])
+            if urlparse(link).netloc == urlparse(url).netloc:
+                links.add(link)
+                print(f"Found link tag: {link}")  # Debug print to check found link tags
+
+    except Exception as e:
+        print(f"Error crawling {url}: {e}")
+    return links
+
+def check_sql_injection(url):
+    """
+    Check for SQL Injection vulnerability.
+    """
+    payloads = ["' OR '1'='1", "' OR '1'='1' --", "' OR '1'='1' /*", "' OR '1'='1' #"]
+    for payload in payloads:
+        test_url = f"{url}?id={payload}"
+        try:
+            response = requests.get(test_url, verify=False)
+            if any(error in response.text.lower() for error in ["syntax error", "mysql", "sql", "database"]):
+                print(f"SQL Injection vulnerability detected at {test_url}")
+                return
+        except requests.RequestException as e:
+            print(f"Error checking SQL Injection for {url}: {e}")
+    print(f"No SQL Injection vulnerability detected at {url}")
+
+def check_xss(url):
+    """
+    Check for XSS vulnerability.
+    """
+    payloads = ["<script>alert('XSS')</script>", "<img src=x onerror=alert('XSS')>", "<svg onload=alert('XSS')>"]
+    for payload in payloads:
+        test_url = f"{url}?q={payload}"
+        try:
+            response = requests.get(test_url, verify=False)
+            if payload in response.text:
+                print(f"XSS vulnerability detected at {test_url}")
+                return
+        except requests.RequestException as e:
+            print(f"Error checking XSS for {url}: {e}")
+    print(f"No XSS vulnerability detected at {url}")
+
+def check_open_redirect(url):
+    """
+    Check for Open Redirect vulnerability.
+    """
+    payloads = [
+        "http://evil.com", 
+        "//evil.com", 
+        "/\\evil.com", 
+        "/%5Cevil.com", 
+        "/%2Fevil.com", 
+        "/%252Fevil.com", 
+        "///evil.com", 
+        "////evil.com"
+    ]
+    for payload in payloads:
+        test_url = f"{url}?next={payload}"
+        try:
+            response = requests.get(test_url, verify=False, allow_redirects=False)
+            location = response.headers.get('Location')
+            if response.status_code in [301, 302] and location and (payload in location or urlparse(location).netloc == "evil.com"):
+                print(f"Open Redirect vulnerability detected at {test_url}")
+                return
+        except requests.RequestException as e:
+            print(f"Error checking Open Redirect for {url}: {e}")
+    print(f"No Open Redirect vulnerability detected at {url}")
+
+def main():
+    base_url = input("Enter the base URL to scan for vulnerabilities: ")
+    links = crawl(base_url)
+    print(f"Found {len(links)} links to scan.")
+
+    for link in links:
+        print(f"Scanning {link}...")
+        check_sql_injection(link)
+        check_xss(link)
+        check_open_redirect(link)
+
+if __name__ == "__main__":
+    main()
+
